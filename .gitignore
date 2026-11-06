@@ -1,0 +1,18 @@
+# dependencias
+/node_modules
+
+# build de next
+/.next
+/out
+
+# entorno (nunca commitear credenciales reales)
+.env
+.env*.local
+
+# varios
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
+
+.vercel
+.env*
