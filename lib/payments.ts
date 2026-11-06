@@ -12,6 +12,9 @@ export interface PaidTour {
   // autoguiado. Puede ser null si el tour no existe en el Rust.
   pickup_lat: number | null;
   pickup_lng: number | null;
+  // Imagen de portada del tour (media uuid de tipo imagen en public.tour_media).
+  // La app la baja con /media/{uuid}/download. Null si el tour no tiene imagen.
+  image_uuid: string | null;
 }
 
 // SELECT comun: suma la ubicacion de inicio (lat/lng) del tour del Rust.
@@ -19,9 +22,20 @@ const PAID_TOUR_SELECT = `
   SELECT p.uuid, p.tour_uuid, p.title, p.description, p.price_cents,
          p.currency, p.active,
          ST_Y(t.pickup_location::geometry) AS pickup_lat,
-         ST_X(t.pickup_location::geometry) AS pickup_lng
+         ST_X(t.pickup_location::geometry) AS pickup_lng,
+         img.image_uuid
   FROM ext.paid_tours p
-  LEFT JOIN public.tours t ON t.uuid = p.tour_uuid`;
+  LEFT JOIN public.tours t ON t.uuid = p.tour_uuid
+  LEFT JOIN LATERAL (
+    SELECT m.uuid AS image_uuid
+    FROM public.tour_media tm
+    JOIN public.media m ON m.uuid = tm.media_uuid
+    WHERE tm.tour_uuid = p.tour_uuid
+      AND m.filetype = 'image'
+      AND m.active = true
+    ORDER BY m.created_at
+    LIMIT 1
+  ) img ON true`;
 
 /** Lista los tours de pago activos. */
 export async function listPaidTours(): Promise<PaidTour[]> {
