@@ -1,4 +1,5 @@
 import { query } from '@/lib/db';
+import { translateMessage } from '@/lib/translate';
 
 export interface ChatMessage {
   uuid: string;
@@ -81,7 +82,25 @@ export async function postMessage(params: {
       params.languageCode,
     ],
   );
-  return rows[0];
+  const msg = rows[0];
+  // Traduce el mensaje a los idiomas destino y cachea (para que el historial
+  // le llegue a cada turista en su idioma). Si falla, el post igual se guarda.
+  try {
+    const map = await translateMessage(msg.text, msg.original_language_code);
+    for (const [lang, txt] of Object.entries(map)) {
+      if (lang === msg.original_language_code) continue;
+      await query(
+        `INSERT INTO ext.chat_message_translation
+           (message_uuid, language_code, translated_text)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (message_uuid, language_code) DO NOTHING`,
+        [msg.uuid, lang, txt],
+      );
+    }
+  } catch (e) {
+    console.error('[postMessage] translate error:', e);
+  }
+  return msg;
 }
 
 /**
