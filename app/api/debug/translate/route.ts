@@ -4,7 +4,7 @@ export const runtime = 'nodejs';
 
 // ENDPOINT DE DIAGNOSTICO TEMPORAL (se borra despues). Revela si la key de
 // Google Translate llega al runtime y la respuesta cruda de la API, para saber
-// por que el chat no traduce. No expone la key (solo su largo).
+// por que el chat no traduce. No expone la key (solo su largo y prefijo).
 export async function GET() {
   const KEY = process.env.GOOGLE_TRANSLATE_API_KEY || '';
   const info: Record<string, unknown> = {
