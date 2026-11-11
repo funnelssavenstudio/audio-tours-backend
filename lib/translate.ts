@@ -22,7 +22,18 @@ async function translateOne(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ q: text, source, target, format: 'text' }),
   });
-  if (!res.ok) return null;
+  if (!res.ok) {
+    let bodyText = '';
+    try {
+      bodyText = await res.text();
+    } catch {
+      // ignore
+    }
+    console.error(
+      `[translate] ${source}->${target} HTTP ${res.status}: ${bodyText.slice(0, 400)}`,
+    );
+    return null;
+  }
   const data = (await res.json()) as any;
   return data?.data?.translations?.[0]?.translatedText ?? null;
 }
