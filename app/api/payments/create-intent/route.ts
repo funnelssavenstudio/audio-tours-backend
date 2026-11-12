@@ -34,10 +34,18 @@ export const POST = withAuth(async (request, user) => {
     );
   }
 
+  // Solo tarjeta: con automatic_payment_methods sin filtrar, la hoja en iOS
+  // podia ofrecer metodos de redireccion (que necesitan return_url) y se
+  // presentaba/cerraba al instante (flash blanco) dejando presentPaymentSheet
+  // colgado. Con allow_redirects 'never' + allowed_payment_method_types ['card']
+  // la hoja es card-only, sin config extra, y funciona con la 4242.
+  // (En Stripe v23 'payment_method_types' se reemplazo por
+  // 'allowed_payment_method_types'.)
   const intent = await getStripe().paymentIntents.create({
     amount: tour.price_cents,
     currency: tour.currency,
-    automatic_payment_methods: { enabled: true },
+    automatic_payment_methods: { enabled: true, allow_redirects: 'never' },
+    allowed_payment_method_types: ['card'],
     metadata: {
       user_uuid: user.uuid,
       tour_uuid: tourUuid,
