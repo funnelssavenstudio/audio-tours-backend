@@ -10,6 +10,11 @@ export interface ChatMessage {
   original_text: string;
   original_language_code: string;
   created_at: string;
+  // Editado/borrado (estilo WhatsApp). `edited` es true si se modifico; `deleted`
+  // true si el remitente (o un guia/admin) lo borro: el cliente muestra
+  // "Mensaje eliminado" en vez del texto.
+  edited: boolean;
+  deleted: boolean;
 }
 
 /**
@@ -73,7 +78,9 @@ export async function postMessage(params: {
      VALUES ($1, $2, $3, $4, $5)
      RETURNING uuid, sender_user_uuid, sender_role,
                original_text AS text, original_text, original_language_code,
-               created_at`,
+               created_at,
+               (edited_at IS NOT NULL) AS edited,
+               (deleted_at IS NOT NULL) AS deleted`,
     [
       room.uuid,
       params.senderUserUuid,
@@ -85,22 +92,104 @@ export async function postMessage(params: {
   const msg = rows[0];
   // Traduce el mensaje a los idiomas destino y cachea (para que el historial
   // le llegue a cada turista en su idioma). Si falla, el post igual se guarda.
+  await cacheMessageTranslations(msg.uuid, msg.text, msg.original_language_code);
+  return msg;
+}
+
+/**
+ * (Re)cachea las traducciones de un mensaje: borra las que hubiera (importante
+ * al EDITAR, para no dejar traducciones viejas) y vuelve a traducir + guardar.
+ * Si la traduccion falla, no rompe la operacion principal (el mensaje ya quedo
+ * guardado); el historial caera al texto original hasta que se pueda traducir.
+ */
+async function cacheMessageTranslations(
+  messageUuid: string,
+  text: string,
+  sourceLang: string,
+): Promise<void> {
   try {
-    const map = await translateMessage(msg.text, msg.original_language_code);
+    await query(
+      `DELETE FROM ext.chat_message_translation WHERE message_uuid = $1`,
+      [messageUuid],
+    );
+    const map = await translateMessage(text, sourceLang);
     for (const [lang, txt] of Object.entries(map)) {
-      if (lang === msg.original_language_code) continue;
+      if (lang === sourceLang) continue;
       await query(
         `INSERT INTO ext.chat_message_translation
            (message_uuid, language_code, translated_text)
          VALUES ($1, $2, $3)
-         ON CONFLICT (message_uuid, language_code) DO NOTHING`,
-        [msg.uuid, lang, txt],
+         ON CONFLICT (message_uuid, language_code) DO UPDATE
+           SET translated_text = EXCLUDED.translated_text`,
+        [messageUuid, lang, txt],
       );
     }
   } catch (e) {
-    console.error('[postMessage] translate error:', e);
+    console.error('[cacheMessageTranslations] translate error:', e);
   }
+}
+
+/**
+ * Edita un mensaje. Solo el autor puede editar su propio mensaje, y no se puede
+ * editar uno ya borrado. Cambia el texto/idioma, marca edited_at y re-traduce.
+ * Devuelve el mensaje actualizado (texto en su idioma original).
+ */
+export async function editMessage(params: {
+  messageUuid: string;
+  userUuid: string;
+  text: string;
+  languageCode: string;
+}): Promise<ChatMessage> {
+  const rows = await query<ChatMessage>(
+    `UPDATE ext.chat_message
+       SET original_text = $3,
+           original_language_code = $4,
+           edited_at = now()
+     WHERE uuid = $1
+       AND sender_user_uuid = $2
+       AND deleted_at IS NULL
+     RETURNING uuid, sender_user_uuid, sender_role,
+               original_text AS text, original_text, original_language_code,
+               created_at,
+               (edited_at IS NOT NULL) AS edited,
+               (deleted_at IS NOT NULL) AS deleted`,
+    [params.messageUuid, params.userUuid, params.text, params.languageCode],
+  );
+  if (rows.length === 0) {
+    throw new Error('No se puede editar este mensaje.');
+  }
+  const msg = rows[0];
+  await cacheMessageTranslations(msg.uuid, msg.text, msg.original_language_code);
   return msg;
+}
+
+/**
+ * Borra (soft-delete) un mensaje. Puede borrarlo el autor, o un guia/admin
+ * (moderacion). El mensaje queda en la base con deleted_at y el cliente muestra
+ * "Mensaje eliminado". Se limpian sus traducciones. Devuelve el uuid borrado.
+ */
+export async function deleteMessage(params: {
+  messageUuid: string;
+  userUuid: string;
+  canModerate: boolean;
+}): Promise<string> {
+  const rows = await query<{ uuid: string }>(
+    `UPDATE ext.chat_message
+       SET deleted_at = now()
+     WHERE uuid = $1
+       AND deleted_at IS NULL
+       AND ($3 = true OR sender_user_uuid = $2)
+     RETURNING uuid`,
+    [params.messageUuid, params.userUuid, params.canModerate],
+  );
+  if (rows.length === 0) {
+    throw new Error('No se puede borrar este mensaje.');
+  }
+  await query(
+    `DELETE FROM ext.chat_message_translation WHERE message_uuid = $1`,
+    [params.messageUuid],
+  );
+  return rows[0].uuid;
 }
 
 /**
@@ -116,10 +205,14 @@ export async function listMessages(
     `SELECT m.uuid,
             m.sender_user_uuid,
             m.sender_role,
-            COALESCE(t.translated_text, m.original_text) AS text,
-            m.original_text,
+            CASE WHEN m.deleted_at IS NOT NULL THEN ''
+                 ELSE COALESCE(t.translated_text, m.original_text) END AS text,
+            CASE WHEN m.deleted_at IS NOT NULL THEN '' ELSE m.original_text END
+              AS original_text,
             m.original_language_code,
-            m.created_at
+            m.created_at,
+            (m.edited_at IS NOT NULL) AS edited,
+            (m.deleted_at IS NOT NULL) AS deleted
      FROM ext.chat_message m
      JOIN ext.chat_room r ON r.uuid = m.room_uuid
      LEFT JOIN ext.chat_message_translation t
