@@ -4,8 +4,12 @@
 
 const KEY = process.env.GOOGLE_TRANSLATE_API_KEY || '';
 
+// Los 13 idiomas confirmados, INCLUIDO el espanol (es) y el espanol latino
+// (es-419) como destino: si no estan, un mensaje escrito en otro idioma nunca
+// se traduce al espanol y el guia lo ve en el original. El idioma de origen se
+// descarta solo mas abajo.
 const TARGETS = (process.env.TRANSLATE_LANGS ||
-  'en,fr,it,pt,de,ru,ar,hi,cs,he,zh')
+  'en,es,es-419,pt,it,fr,cs,zh,hi,de,ru,ar,he')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
