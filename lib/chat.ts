@@ -1,5 +1,22 @@
 import { query } from '@/lib/db';
+import { sendPushToUsers } from '@/lib/push';
 import { translateMessage } from '@/lib/translate';
+
+/**
+ * UUIDs de los miembros del evento (guias + turistas con ticket o checkin).
+ * Se usa para mandar la notificacion push del chat a todos menos el emisor.
+ */
+export async function getEventMemberUuids(eventUuid: string): Promise<string[]> {
+  const rows = await query<{ uuid: string }>(
+    `SELECT tour_guide_uuid AS uuid FROM public.event_tour_guides WHERE event_uuid = $1
+     UNION
+     SELECT tourist_uuid AS uuid FROM public.tickets WHERE event_uuid = $1
+     UNION
+     SELECT tourist_uuid AS uuid FROM public.event_checkins WHERE event_uuid = $1`,
+    [eventUuid],
+  );
+  return rows.map((r) => r.uuid).filter(Boolean);
+}
 
 export interface ChatMessage {
   uuid: string;
@@ -93,7 +110,31 @@ export async function postMessage(params: {
   // Traduce el mensaje a los idiomas destino y cachea (para que el historial
   // le llegue a cada turista en su idioma). Si falla, el post igual se guarda.
   await cacheMessageTranslations(msg.uuid, msg.text, msg.original_language_code);
+  // Notificacion push a los demas miembros del evento (menos el emisor). Es
+  // best-effort: no bloquea el envio ni lo hace fallar si push no esta activo.
+  void notifyChatMessage(params.eventUuid, params.senderUserUuid, msg.text);
   return msg;
+}
+
+/** Manda la push del chat a los miembros del evento, menos el emisor. */
+async function notifyChatMessage(
+  eventUuid: string,
+  senderUuid: string,
+  text: string,
+): Promise<void> {
+  try {
+    const members = await getEventMemberUuids(eventUuid);
+    const targets = members.filter((u) => u !== senderUuid);
+    if (targets.length === 0) return;
+    const body = text.length > 140 ? text.slice(0, 137) + '...' : text;
+    await sendPushToUsers(targets, {
+      title: 'Nuevo mensaje en el chat',
+      body,
+      data: { type: 'chat', event_uuid: eventUuid },
+    });
+  } catch (e) {
+    console.error('[notifyChatMessage] error:', e);
+  }
 }
 
 /**
