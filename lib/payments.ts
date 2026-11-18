@@ -37,10 +37,47 @@ const PAID_TOUR_SELECT = `
     LIMIT 1
   ) img ON true`;
 
-/** Lista los tours de pago activos. */
-export async function listPaidTours(): Promise<PaidTour[]> {
+// Igual que el anterior, pero el titulo/descripcion salen de la traduccion del
+// TOUR en el idioma pedido ($1 = codigo de idioma), con fallback al titulo del
+// producto si ese idioma no tiene traduccion. Para el catalogo que ve el usuario.
+const PAID_TOUR_SELECT_I18N = `
+  SELECT p.uuid, p.tour_uuid,
+         COALESCE(tt.title, p.title) AS title,
+         COALESCE(tt.description, p.description) AS description,
+         p.price_cents, p.currency, p.active,
+         ST_Y(t.pickup_location::geometry) AS pickup_lat,
+         ST_X(t.pickup_location::geometry) AS pickup_lng,
+         img.image_uuid
+  FROM ext.paid_tours p
+  LEFT JOIN public.tours t ON t.uuid = p.tour_uuid
+  LEFT JOIN public.languages l ON l.code = $1
+  LEFT JOIN public.tour_translations tt
+    ON tt.tour_uuid = p.tour_uuid AND tt.language_uuid = l.uuid
+  LEFT JOIN LATERAL (
+    SELECT m.uuid AS image_uuid
+    FROM public.tour_media tm
+    JOIN public.media m ON m.uuid = tm.media_uuid
+    WHERE tm.tour_uuid = p.tour_uuid
+      AND m.filetype = 'image'
+      AND m.active = true
+    ORDER BY m.created_at
+    LIMIT 1
+  ) img ON true`;
+
+/** Normaliza el codigo de idioma de la app al de public.languages. */
+function normalizePaidLang(lang?: string | null): string {
+  if (!lang) return 'es';
+  const l = lang.trim().toLowerCase();
+  if (l === 'es-419') return 'es';
+  if (l.startsWith('zh')) return 'zh-hans';
+  return l.split('-')[0];
+}
+
+/** Lista los tours de pago activos, con titulo/descripcion en el idioma dado. */
+export async function listPaidTours(lang?: string): Promise<PaidTour[]> {
   return query<PaidTour>(
-    `${PAID_TOUR_SELECT} WHERE p.active = true ORDER BY p.title`,
+    `${PAID_TOUR_SELECT_I18N} WHERE p.active = true ORDER BY COALESCE(tt.title, p.title)`,
+    [normalizePaidLang(lang)],
   );
 }
 

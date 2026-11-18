@@ -2,10 +2,12 @@ import { NextResponse } from 'next/server';
 
 import { listPaidTours } from '@/lib/payments';
 
-// Lista los tours de pago disponibles (publico).
-export async function GET() {
+// Lista los tours de pago disponibles (publico). ?lang= define el idioma del
+// titulo/descripcion (el que el usuario eligio en su perfil).
+export async function GET(request: Request) {
   try {
-    const list = await listPaidTours();
+    const lang = new URL(request.url).searchParams.get('lang') ?? undefined;
+    const list = await listPaidTours(lang);
     return NextResponse.json({ list });
   } catch {
     return NextResponse.json(
